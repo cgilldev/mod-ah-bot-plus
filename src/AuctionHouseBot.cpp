@@ -21,6 +21,7 @@
 #include "ObjectMgr.h"
 #include "AuctionHouseMgr.h"
 #include "AuctionHouseBot.h"
+#include "AuctionHousePolicy.h"
 #include "AuctionHouseSearcher.h"
 #include "Config.h"
 #include "Player.h"
@@ -29,6 +30,7 @@
 #include "ItemTemplate.h"
 #include "SharedDefines.h"
 #include "SpellMgr.h"
+#include <algorithm>
 #include <cmath>
 
 #include <set>
@@ -64,7 +66,6 @@ AuctionHouseBot::AuctionHouseBot() :
     ListingExpireTimeInSecondsMax(86400),
     BuyingBotAcceptablePriceModifier(1),
     BuyingBotAlwaysBidMaxCalculatedPrice(false),
-    BuyingBotWillBidAgainstPlayers(false),
     AHCharactersGUIDsForQuery(""),
     ItemsPerCycle(75),
     DisabledItemTextFilter(true),
@@ -202,6 +203,15 @@ uint32 AuctionHouseBot::GetStackSizeForItem(ItemTemplate const* itemProto) const
     // Determine the stack ratio based on class type
     if (itemProto == NULL)
         return 1;
+
+    if (ProgressionStockRulesEnabled)
+    {
+        bool material = itemProto->Class == ITEM_CLASS_REAGENT ||
+            itemProto->Class == ITEM_CLASS_TRADE_GOODS;
+        bool consumable = itemProto->Class == ITEM_CLASS_CONSUMABLE;
+        return AuctionHousePolicy::SmallStack(itemProto->GetMaxStackSize(), material,
+            consumable, urand(0, material ? 2 : 1));
+    }
 
     uint32 stackRatio = 0;
     switch (itemProto->Class)
@@ -1025,6 +1035,15 @@ void AuctionHouseBot::AddNewAuctions(std::vector<Player*> AHBPlayers, FactionSpe
         return;
     }
 
+    if (AHBPlayers.empty())
+    {
+        LOG_WARN("module", "AHSeller: No configured auction characters are available for house {}.", config->GetAHID());
+        return;
+    }
+
+    if (ProgressionStockRulesEnabled && !ProgressionAnchorCeiling)
+        return;
+
     uint32 minItems = config->GetMinItems();
     uint32 maxItems = config->GetMaxItems();
 
@@ -1042,7 +1061,28 @@ void AuctionHouseBot::AddNewAuctions(std::vector<Player*> AHBPlayers, FactionSpe
         return;
     }
 
-    uint32 currentAuctionItemListCount = auctionHouse->Getcount();
+    std::unordered_map<uint32, uint32> botListingCounts;
+    uint32 botListingCount = 0;
+    uint32 botRareListingCount = 0;
+    for (auto const& auctionEntry : auctionHouse->GetAuctions())
+    {
+        AuctionEntry* auction = auctionEntry.second;
+        if (!auction || std::none_of(AHCharacters.begin(), AHCharacters.end(),
+            [auction](AuctionHouseBotCharacter const& character)
+            {
+                return character.CharacterGUID == auction->owner.GetCounter();
+            }))
+            continue;
+
+        ++botListingCount;
+        ++botListingCounts[auction->item_template];
+        ItemTemplate const* listedTemplate = sObjectMgr->GetItemTemplate(auction->item_template);
+        if (listedTemplate && listedTemplate->Quality == ITEM_QUALITY_RARE)
+            ++botRareListingCount;
+    }
+
+    // Progression stock targets describe bot inventory, not player auctions.
+    uint32 currentAuctionItemListCount = ProgressionStockRulesEnabled ? botListingCount : auctionHouse->Getcount();
     if (currentAuctionItemListCount >= minItems)
     {
         if (debug_Out)
@@ -1057,9 +1097,56 @@ void AuctionHouseBot::AddNewAuctions(std::vector<Player*> AHBPlayers, FactionSpe
         return;
     }
 
+    auto progressionEligible = [&](uint32 itemID, ItemTemplate const* prototype)
+    {
+        if (!prototype)
+            return false;
+        bool professionItem = prototype->Class == ITEM_CLASS_RECIPE ||
+            prototype->Class == ITEM_CLASS_REAGENT || prototype->Class == ITEM_CLASS_TRADE_GOODS;
+        return AuctionHousePolicy::StockEligible(itemID, prototype->Quality, prototype->RequiredLevel,
+            prototype->RequiredSkillRank, prototype->ItemLevel, professionItem, ProgressionAnchorCeiling,
+            ProgressionStockRequiredLevelOffset, ProgressionStockMaxItemLevelWithoutRequirements,
+            ProgressionStockMaxProfessionSkillRank);
+    };
+
+    std::map<uint32, std::map<uint32, std::vector<uint32>>> progressionCandidates;
+    std::vector<ListProportionNode> progressionWeights;
+    if (ProgressionStockRulesEnabled)
+    {
+        ActiveListMultipleItemID = 0;
+        RemainingListMultipleCount = 0;
+        for (ListProportionNode const& node : ItemListProportionNodesSeed)
+        {
+            auto classCandidates = ItemCandidatesByItemClassAndQuality.find(node.ItemClassID);
+            if (classCandidates == ItemCandidatesByItemClassAndQuality.end())
+                continue;
+            auto qualityCandidates = classCandidates->second.find(node.ItemQualityID);
+            if (qualityCandidates == classCandidates->second.end())
+                continue;
+            auto& eligible = progressionCandidates[node.ItemClassID][node.ItemQualityID];
+            for (uint32 itemID : qualityCandidates->second)
+            {
+                ItemTemplate const* prototype = sObjectMgr->GetItemTemplate(itemID);
+                if (progressionEligible(itemID, prototype) &&
+                    AuctionHousePolicy::CanListDuplicate(botListingCounts[itemID]))
+                    eligible.push_back(itemID);
+            }
+            if (!eligible.empty())
+                for (uint32 weight = 0; weight < node.Proportion; ++weight)
+                    progressionWeights.push_back(node);
+        }
+        if (progressionWeights.empty())
+        {
+            LOG_WARN("module", "AHSeller: No progression-eligible stock candidates for house {} at ceiling {}.",
+                config->GetAHID(), ProgressionAnchorCeiling);
+            return;
+        }
+    }
+
     uint32 newItemsToListCount = 0;
-    if ((maxItems - currentAuctionItemListCount) >= ItemsPerCycle)
-        newItemsToListCount = ItemsPerCycle;
+    uint32 itemsPerCycle = ProgressionStockRulesEnabled ? std::min<uint32>(ItemsPerCycle, 50) : ItemsPerCycle;
+    if ((maxItems - currentAuctionItemListCount) >= itemsPerCycle)
+        newItemsToListCount = itemsPerCycle;
     else
         newItemsToListCount = (maxItems - currentAuctionItemListCount);
 
@@ -1073,6 +1160,8 @@ void AuctionHouseBot::AddNewAuctions(std::vector<Player*> AHBPlayers, FactionSpe
     uint32 itemsGenerated = 0;
     for (uint32 cnt = 1; cnt <= newItemsToListCount; cnt++)
     {
+        if (ProgressionStockRulesEnabled && progressionWeights.empty())
+            break;
         auto trans = CharacterDatabase.BeginTransaction();
         ItemTemplate const* prototype = nullptr;
         uint32 batchCount = 0;
@@ -1086,7 +1175,35 @@ void AuctionHouseBot::AddNewAuctions(std::vector<Player*> AHBPlayers, FactionSpe
 
             // Either generate a new item ID to list, or grab from the remaining list
             uint32 itemID;
-            if (ActiveListMultipleItemID != 0)
+            if (ProgressionStockRulesEnabled)
+            {
+                if (progressionWeights.empty())
+                    break;
+                ListProportionNode const node = progressionWeights[urand(0, progressionWeights.size() - 1)];
+                auto& eligible = progressionCandidates[node.ItemClassID][node.ItemQualityID];
+                if (eligible.empty())
+                {
+                    progressionWeights.erase(std::remove_if(progressionWeights.begin(), progressionWeights.end(),
+                        [&node](ListProportionNode const& candidate)
+                        {
+                            return candidate.ItemClassID == node.ItemClassID &&
+                                candidate.ItemQualityID == node.ItemQualityID;
+                        }), progressionWeights.end());
+                    ++batchCount;
+                    continue;
+                }
+                uint32 candidateIndex = urand(0, eligible.size() - 1);
+                itemID = eligible[candidateIndex];
+                prototype = sObjectMgr->GetItemTemplate(itemID);
+                if (!prototype || !AuctionHousePolicy::CanListDuplicate(botListingCounts[itemID]))
+                {
+                    eligible[candidateIndex] = eligible.back();
+                    eligible.pop_back();
+                    ++batchCount;
+                    continue;
+                }
+            }
+            else if (ActiveListMultipleItemID != 0)
             {
                 itemID = ActiveListMultipleItemID;
 
@@ -1146,6 +1263,38 @@ void AuctionHouseBot::AddNewAuctions(std::vector<Player*> AHBPlayers, FactionSpe
                 }
             }
 
+            if (ProgressionStockRulesEnabled)
+            {
+                if (!progressionEligible(itemID, prototype) ||
+                    (prototype->Quality == ITEM_QUALITY_RARE &&
+                        !AuctionHousePolicy::CanListRare(botRareListingCount, botListingCount)))
+                {
+                    LOG_DEBUG("module", "AHSeller: Item {} excluded by progression stock rules (required level {}, "
+                        "skill rank {}, item level {}, quality {}).", itemID, prototype->RequiredLevel,
+                        prototype->RequiredSkillRank, prototype->ItemLevel, prototype->Quality);
+                    if (ActiveListMultipleItemID == itemID)
+                    {
+                        ActiveListMultipleItemID = 0;
+                        RemainingListMultipleCount = 0;
+                    }
+                    batchCount++;
+                    continue;
+                }
+            }
+
+            if (!AuctionHousePolicy::CanListDuplicate(botListingCounts[itemID]))
+            {
+                LOG_DEBUG("module", "AHSeller: Item {} already has three bot listings in house {}.",
+                    itemID, config->GetAHID());
+                if (ActiveListMultipleItemID == itemID)
+                {
+                    ActiveListMultipleItemID = 0;
+                    RemainingListMultipleCount = 0;
+                }
+                batchCount++;
+                continue;
+            }
+
             Player* AHBplayer = AHBPlayers[urand(0, AHBPlayers.size() - 1)];
 
             Item* item = Item::CreateItem(itemID, 1, AHBplayer);
@@ -1193,12 +1342,27 @@ void AuctionHouseBot::AddNewAuctions(std::vector<Player*> AHBPlayers, FactionSpe
             sAuctionMgr->AddAItem(item);
             auctionHouse->AddAuction(auctionEntry);
             auctionEntry->SaveToDB(trans);
+            ++botListingCounts[itemID];
+            ++botListingCount;
+            if (ProgressionStockRulesEnabled && !AuctionHousePolicy::CanListDuplicate(botListingCounts[itemID]))
+            {
+                auto& eligible = progressionCandidates[prototype->Class][prototype->Quality];
+                eligible.erase(std::remove(eligible.begin(), eligible.end(), itemID), eligible.end());
+            }
+            if (prototype->Quality == ITEM_QUALITY_RARE)
+                ++botRareListingCount;
+            if (ProgressionStockRulesEnabled)
+                LOG_DEBUG("module", "AHSeller: Progression stock item {} stack {} bid {} buyout {} in house {}.",
+                    itemID, stackCount, auctionEntry->startbid, auctionEntry->buyout, config->GetAHID());
             itemsGenerated++;
             batchCount++;
         }
 
         CharacterDatabase.CommitTransaction(trans);
     }
+    if (ProgressionStockRulesEnabled && itemsGenerated < newItemsToListCount)
+        LOG_INFO("module", "AHSeller: Progression stock shortfall in house {}: listed {} of {} requested items.",
+            config->GetAHID(), itemsGenerated, newItemsToListCount);
     if (debug_Out)
         LOG_INFO("module", "AHSeller: Added {} items", itemsGenerated);
 }
@@ -1647,6 +1811,69 @@ int AuctionHouseBot::GetItemDropChanceTier(double dropRate)
     return DropRatesToTierMap.size();
 }
 
+bool AuctionHouseBot::IsPlayerAuctionReadyForReview(uint32 auctionId)
+{
+    QueryResult result = CharacterDatabase.Query(
+        "SELECT review_after FROM mod_ahbot_player_auction_review WHERE auction_id = {}", auctionId);
+    if (!result)
+    {
+        uint32 delayMinutes = urand(BuyerFirstReviewMinMinutes, BuyerFirstReviewMaxMinutes);
+        CharacterDatabase.Execute(
+            "INSERT IGNORE INTO mod_ahbot_player_auction_review (auction_id, first_seen, review_after) "
+            "VALUES ({}, UNIX_TIMESTAMP(), UNIX_TIMESTAMP() + {})",
+            auctionId, delayMinutes * 60);
+        LOG_DEBUG("module", "AHBuyer: Auction {} first seen; review delayed {} minutes.", auctionId, delayMinutes);
+        return false;
+    }
+
+    return AuctionHousePolicy::ReviewReady(result->Fetch()[0].Get<uint32>(),
+        static_cast<uint32>(time(nullptr)));
+}
+
+bool AuctionHouseBot::CanCommitToSeller(uint32 sellerGuid, uint64 amount)
+{
+    auto budget = BuyerSellerBudgetCache.find(sellerGuid);
+    if (budget == BuyerSellerBudgetCache.end())
+    {
+        QueryResult result = CharacterDatabase.Query(
+            "SELECT COUNT(*), COALESCE(SUM(amount), 0) FROM mod_ahbot_buyer_commitment "
+            "WHERE seller_guid = {} AND committed_at >= UNIX_TIMESTAMP() - 3600", sellerGuid);
+        if (!result)
+        {
+            LOG_ERROR("module", "AHBuyer: Seller budget table unavailable; buyer commitment blocked.");
+            return false;
+        }
+
+        Field* fields = result->Fetch();
+        budget = BuyerSellerBudgetCache.emplace(sellerGuid,
+            std::make_pair(fields[0].Get<uint32>(), fields[1].Get<uint64>())).first;
+    }
+
+    uint64 maxCopper = std::max<uint64>(BuyerMinSellerBudgetCopper,
+        static_cast<uint64>(ProgressionAnchorCeiling) * BuyerBudgetCopperPerCeilingLevel);
+    if (!AuctionHousePolicy::WithinSellerBudget(budget->second.first,
+        budget->second.second, amount, BuyerMaxCommitmentsPerSellerHour, maxCopper))
+    {
+        LOG_DEBUG("module", "AHBuyer: Seller {} exceeds hourly budget ({} commitments, {} copper; limit {}, {}).",
+            sellerGuid, budget->second.first, budget->second.second,
+            BuyerMaxCommitmentsPerSellerHour, maxCopper);
+        return false;
+    }
+
+    return true;
+}
+
+void AuctionHouseBot::RecordBuyerCommitment(CharacterDatabaseTransaction const& transaction,
+    uint32 sellerGuid, uint32 auctionId, uint64 amount)
+{
+    transaction->Append(
+        "INSERT INTO mod_ahbot_buyer_commitment (seller_guid, auction_id, amount, committed_at) "
+        "VALUES ({}, {}, {}, UNIX_TIMESTAMP())", sellerGuid, auctionId, amount);
+    auto& budget = BuyerSellerBudgetCache[sellerGuid];
+    ++budget.first;
+    budget.second += amount;
+}
+
 void AuctionHouseBot::AddNewAuctionBuyerBotBid(std::vector<Player*> AHBPlayers, FactionSpecificAuctionHouseConfig *config)
 {
     if (!BuyingBotEnabled)
@@ -1656,27 +1883,27 @@ void AuctionHouseBot::AddNewAuctionBuyerBotBid(std::vector<Player*> AHBPlayers, 
         return;
     }
 
-    // Pull currentAuctionItemListCount.
-    string queryString = "SELECT id FROM auctionhouse WHERE itemowner NOT IN ({}) AND buyguid NOT IN ({})";
-    if (BuyingBotWillBidAgainstPlayers == false)
-        queryString = "SELECT id FROM auctionhouse WHERE itemowner NOT IN ({}) AND buyguid NOT IN ({}) AND lastbid = 0";
-    QueryResult result = CharacterDatabase.Query(queryString, AHCharactersGUIDsForQuery, AHCharactersGUIDsForQuery);
-
-    if (!result)
+    if (BuyerProgressionPolicyEnabled && !ProgressionAnchorCeiling)
         return;
 
-    if (result->GetRowCount() == 0)
+    AuctionHouseObject* auctionHouse = sAuctionMgr->GetAuctionsMap(config->GetAHFID());
+    if (!auctionHouse)
         return;
 
-    // Fetches content of selected AH
-    AuctionHouseObject* auctionHouse =  sAuctionMgr->GetAuctionsMap(config->GetAHFID());
     vector<uint32> possibleBids;
-
-    do
+    for (auto const& auctionPair : auctionHouse->GetAuctions())
     {
-        uint32 tmpdata = result->Fetch()->Get<uint32>();
-        possibleBids.push_back(tmpdata);
-    } while (result->NextRow());
+        AuctionEntry const* auction = auctionPair.second;
+        if (!auction || auction->bidder)
+            continue;
+        if (std::any_of(AHCharacters.begin(), AHCharacters.end(),
+            [auction](AuctionHouseBotCharacter const& character)
+            {
+                return character.CharacterGUID == auction->owner.GetCounter();
+            }))
+            continue;
+        possibleBids.push_back(auctionPair.first);
+    }
 
     int randBuyingBotBuyCandidatesPerBuyCycle = urand(BuyingBotBuyCandidatesPerBuyCycleMin, BuyingBotBuyCandidatesPerBuyCycleMax);
     for (int count = 1; count <= randBuyingBotBuyCandidatesPerBuyCycle; ++count)
@@ -1702,6 +1929,23 @@ void AuctionHouseBot::AddNewAuctionBuyerBotBid(std::vector<Player*> AHBPlayers, 
 
         if (!auction)
             continue;
+
+        if (BuyerProgressionPolicyEnabled && !IsPlayerAuctionReadyForReview(auction->Id))
+            continue;
+
+        // The legacy option may include already-bid auctions in the candidate query,
+        // but a bot must never displace a human bidder. Existing bot bids may still
+        // be evaluated and remain valid until the auction settles.
+        if (auction->bidder && std::none_of(AHCharacters.begin(), AHCharacters.end(),
+            [auction](AuctionHouseBotCharacter const& character)
+            {
+                return character.CharacterGUID == auction->bidder.GetCounter();
+            }))
+        {
+            if (debug_Out)
+                LOG_INFO("module", "AHBuyer: Skipping auction {} because a human bidder is present.", auction->Id);
+            continue;
+        }
 
         // get exact item information
 		Item *pItem = sAuctionMgr->GetAItem(auction->item_guid);
@@ -1733,7 +1977,16 @@ void AuctionHouseBot::AddNewAuctionBuyerBotBid(std::vector<Player*> AHBPlayers, 
         bool doBid = false;
         uint64 calcBidAmount = 0;
 
-        if (auction->buyout != 0 && auction->buyout < willingToPayForStackPrice)
+        if (BuyerProgressionPolicyEnabled)
+        {
+            AuctionHousePolicy::PurchaseDecision decision = AuctionHousePolicy::ChoosePurchase(
+                auction->startbid, auction->bid, auction->buyout,
+                willingToPayForStackPrice, BuyingBotAlwaysBidMaxCalculatedPrice);
+            doBuyout = decision.kind == AuctionHousePolicy::PurchaseKind::Buyout;
+            doBid = decision.kind == AuctionHousePolicy::PurchaseKind::Bid;
+            calcBidAmount = decision.amount;
+        }
+        else if (auction->buyout != 0 && auction->buyout < willingToPayForStackPrice)
             doBuyout = true;
         else
         {
@@ -1759,19 +2012,28 @@ void AuctionHouseBot::AddNewAuctionBuyerBotBid(std::vector<Player*> AHBPlayers, 
         // price table was built) get UINT32_MAX, which behaves the same as "not sold by a vendor"
         bool preventedOverpayingForVendorItem = false;
         uint32 vendorSellPrice = prototype->ItemId < vendorItemsPrices.size() ? vendorItemsPrices[prototype->ItemId] : UINT32_MAX;
-        if (PreventOverpayingForVendorItems && vendorSellPrice > 0)
+        if (PreventOverpayingForVendorItems && vendorSellPrice > 0 && vendorSellPrice != UINT32_MAX)
         {
-            if (doBuyout && auction->buyout > vendorSellPrice)
+            // Auction values and commitments are stack totals; compare them
+            // with the vendor value of the entire stack, not one unit.
+            if (doBuyout && !AuctionHousePolicy::VendorAllows(
+                auction->buyout, vendorSellPrice, pItem->GetCount()))
             {
                 doBuyout = false;
                 preventedOverpayingForVendorItem = true;
             }
-            if (doBid && calcBidAmount > vendorSellPrice)
+            if (doBid && !AuctionHousePolicy::VendorAllows(
+                calcBidAmount, vendorSellPrice, pItem->GetCount()))
             {
                 doBid = false;
                 preventedOverpayingForVendorItem = true;
             }
         }
+
+        uint64 commitment = doBuyout ? auction->buyout : (doBid ? calcBidAmount : 0);
+        uint32 sellerGuid = auction->owner.GetCounter();
+        if (BuyerProgressionPolicyEnabled && commitment && !CanCommitToSeller(sellerGuid, commitment))
+            continue;
 
         if (debug_Out)
         {
@@ -1827,6 +2089,9 @@ void AuctionHouseBot::AddNewAuctionBuyerBotBid(std::vector<Player*> AHBPlayers, 
             stmt->SetData(2, auction->Id);
             trans->Append(stmt);
 
+            if (BuyerProgressionPolicyEnabled)
+                RecordBuyerCommitment(trans, sellerGuid, auction->Id, commitment);
+
             CharacterDatabase.CommitTransaction(trans);
         }
         else if (doBuyout)
@@ -1842,6 +2107,9 @@ void AuctionHouseBot::AddNewAuctionBuyerBotBid(std::vector<Player*> AHBPlayers, 
             sAuctionMgr->SendAuctionSuccessfulMail(auction, trans);
             sAuctionMgr->SendAuctionWonMail(auction, trans);
             auction->DeleteFromDB(trans);
+
+            if (BuyerProgressionPolicyEnabled)
+                RecordBuyerCommitment(trans, sellerGuid, auction->Id, commitment);
 
             sAuctionMgr->RemoveAItem(auction->item_guid);
             auctionHouse->RemoveAuction(auction);
@@ -1881,6 +2149,19 @@ void AuctionHouseBot::Update()
     // Only update if a Buy or Sell update cycle has been hit
     if (!buyReady && !sellReady)
         return;
+
+    BuyerSellerBudgetCache.clear();
+    if (ProgressionStockRulesEnabled || BuyerProgressionPolicyEnabled)
+    {
+        QueryResult result = CharacterDatabase.Query(
+            "SELECT level_ceiling FROM acore_playerbots.playerbot_progression_state WHERE id = 1");
+        ProgressionAnchorCeiling = result ? result->Fetch()[0].Get<uint32>() : 0;
+        if (!ProgressionAnchorCeiling)
+        {
+            LOG_ERROR("module", "AuctionHouseBot: Anchor ceiling unavailable; progression stock and buyer commitments paused.");
+            return;
+        }
+    }
     
     // Load all AH Bot Players
     std::vector<std::pair<std::unique_ptr<Player>, std::unique_ptr<WorldSession>>> AHBPlayers;
@@ -1956,6 +2237,28 @@ void AuctionHouseBot::InitializeConfiguration()
 
     SellingBotEnabled = sConfigMgr->GetOption<bool>("AuctionHouseBot.EnableSeller", false);
     BuyingBotEnabled = sConfigMgr->GetOption<bool>("AuctionHouseBot.Buyer.Enabled", false);
+    BuyerProgressionPolicyEnabled = sConfigMgr->GetOption<bool>(
+        "AuctionHouseBot.Buyer.ProgressionPolicyEnabled", false);
+    BuyerFirstReviewMinMinutes = sConfigMgr->GetOption<uint32>(
+        "AuctionHouseBot.Buyer.FirstReviewMinMinutes", 10);
+    BuyerFirstReviewMaxMinutes = std::max<uint32>(BuyerFirstReviewMinMinutes,
+        sConfigMgr->GetOption<uint32>("AuctionHouseBot.Buyer.FirstReviewMaxMinutes", 30));
+    BuyerMaxCommitmentsPerSellerHour = sConfigMgr->GetOption<uint32>(
+        "AuctionHouseBot.Buyer.MaxCommitmentsPerSellerHour", 6);
+    BuyerMinSellerBudgetCopper = sConfigMgr->GetOption<uint32>(
+        "AuctionHouseBot.Buyer.MinSellerBudgetCopper", 10000);
+    BuyerBudgetCopperPerCeilingLevel = sConfigMgr->GetOption<uint32>(
+        "AuctionHouseBot.Buyer.BudgetCopperPerCeilingLevel", 1000);
+    ProgressionStockRulesEnabled = sConfigMgr->GetOption<bool>(
+        "AuctionHouseBot.ProgressionStock.Enabled", false);
+    ProgressionStockRequiredLevelOffset = sConfigMgr->GetOption<uint32>(
+        "AuctionHouseBot.ProgressionStock.RequiredLevelOffset", 5);
+    ProgressionStockMaxItemLevelWithoutRequirements =
+        sConfigMgr->GetOption<uint32>(
+            "AuctionHouseBot.ProgressionStock.MaxItemLevelWithoutRequirements",
+            25);
+    ProgressionStockMaxProfessionSkillRank = sConfigMgr->GetOption<uint32>(
+        "AuctionHouseBot.ProgressionStock.MaxProfessionSkillRank", 90);
 
     string charString = sConfigMgr->GetOption<std::string>("AuctionHouseBot.GUIDs", "0");
     AddCharacters(charString);
@@ -2017,7 +2320,6 @@ void AuctionHouseBot::InitializeConfiguration()
     PreventOverpayingForVendorItems = sConfigMgr->GetOption<bool>("AuctionHouseBot.Buyer.PreventOverpayingForVendorItems", true);
     if (PreventOverpayingForVendorItems)
         PopulateVendorItemsPrices();
-    BuyingBotWillBidAgainstPlayers = sConfigMgr->GetOption<bool>("AuctionHouseBot.Buyer.BidAgainstPlayers", false);
 
     // Stack Ratios
     RandomStackRatioConsumable = GetRandomStackValue("AuctionHouseBot.ListingStack.RandomRatio.Consumable", 50);

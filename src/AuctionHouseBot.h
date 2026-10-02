@@ -22,9 +22,11 @@
 #define AUCTION_HOUSE_BOT_H
 
 #include "Common.h"
+#include "DatabaseEnvFwd.h"
 #include "ObjectGuid.h"
 
 #include <map>
+#include <unordered_map>
 #include <vector>
 
 struct AuctionEntry;
@@ -128,6 +130,18 @@ private:
 
     bool SellingBotEnabled;
     bool BuyingBotEnabled;
+    bool BuyerProgressionPolicyEnabled = false;
+    uint32 BuyerFirstReviewMinMinutes = 10;
+    uint32 BuyerFirstReviewMaxMinutes = 30;
+    uint32 BuyerMaxCommitmentsPerSellerHour = 6;
+    uint32 BuyerMinSellerBudgetCopper = 10000;
+    uint32 BuyerBudgetCopperPerCeilingLevel = 1000;
+    uint32 ProgressionAnchorCeiling = 0;
+    std::unordered_map<uint32, std::pair<uint32, uint64>> BuyerSellerBudgetCache;
+    bool ProgressionStockRulesEnabled = false;
+    uint32 ProgressionStockRequiredLevelOffset = 5;
+    uint32 ProgressionStockMaxItemLevelWithoutRequirements = 25;
+    uint32 ProgressionStockMaxProfessionSkillRank = 90;
     bool ReturnExpiredAuctionItemsToBot;
     uint32 CyclesBetweenBuyActionMin;
     uint32 CyclesBetweenBuyAction;
@@ -152,7 +166,6 @@ private:
     uint32 ListingExpireTimeInSecondsMax;
     float BuyingBotAcceptablePriceModifier;
     bool BuyingBotAlwaysBidMaxCalculatedPrice;
-    bool BuyingBotWillBidAgainstPlayers;
     std::vector<uint32> vendorItemsPrices;
     std::string AHCharactersGUIDsForQuery;
     uint32 ItemsPerCycle;
@@ -378,6 +391,10 @@ public:
     uint32 GetRandomItemIDForListing();
     void AddNewAuctions(std::vector<Player*> AHBPlayers, FactionSpecificAuctionHouseConfig* config);
     void AddNewAuctionBuyerBotBid(std::vector<Player*> AHBPlayers, FactionSpecificAuctionHouseConfig* config);
+    bool IsPlayerAuctionReadyForReview(uint32 auctionId);
+    bool CanCommitToSeller(uint32 sellerGuid, uint64 amount);
+    void RecordBuyerCommitment(CharacterDatabaseTransaction const& transaction, uint32 sellerGuid,
+        uint32 auctionId, uint64 amount);
     void PopulateVendorItemsPrices();
     void CleanupExpiredAuctionItems();
 
