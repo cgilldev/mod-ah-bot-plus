@@ -2,6 +2,8 @@
  * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU AGPL v3 license: https://github.com/azerothcore/azerothcore-wotlk/blob/master/LICENSE-AGPL3
 */
 
+#include <unordered_set>
+
 #include "Chat.h"
 #include "ScriptMgr.h"
 #include "AuctionHouseBot.h"
@@ -58,8 +60,17 @@ class AHBot_AuctionHouseScript : public AuctionHouseScript
 public:
     AHBot_AuctionHouseScript() : AuctionHouseScript("AHBot_AuctionHouseScript") { }
 
-    void OnBeforeAuctionHouseMgrSendAuctionSuccessfulMail(AuctionHouseMgr* /*auctionHouseMgr*/, AuctionEntry* /*auction*/, Player* owner, uint32& /*owner_accId*/, uint32& /*profit*/, bool& sendNotification, bool& updateAchievementCriteria, bool& /*sendMail*/) override
+    void OnBeforeAuctionHouseMgrSendAuctionSuccessfulMail(AuctionHouseMgr* /*auctionHouseMgr*/, AuctionEntry* auction,
+                                                          Player* owner, uint32& /*owner_accId*/, uint32& /*profit*/,
+                                                          bool& sendNotification, bool& updateAchievementCriteria,
+                                                          bool& /*sendMail*/) override
     {
+        if (auction)
+            auction->syntheticBuyer =
+                std::any_of(auctionbot->AHCharacters.begin(), auctionbot->AHCharacters.end(),
+                            [auction](AuctionHouseBotCharacter const& character) {
+                                return auction->bidder == ObjectGuid::Create<HighGuid::Player>(character.CharacterGUID);
+                            });
         if (owner)
         {
             bool isAHBot = false;
@@ -135,6 +146,20 @@ public:
 
     void OnBeforeAuctionHouseMgrUpdate() override
     {
+        // Reconstruct filler roles even when the selling cycle is disabled.
+        std::unordered_set<AuctionHouseObject*> visited;
+        for (uint32 faction : {12u, 29u, 120u})
+        {
+            auto house = sAuctionMgr->GetAuctionsMap(faction);
+            if (!house || !visited.insert(house).second)
+                continue;
+            for (auto const& [id, auction] : house->GetAuctions())
+                if (auction)
+                    auction->syntheticStock = std::any_of(
+                        auctionbot->AHCharacters.begin(), auctionbot->AHCharacters.end(),
+                        [auction](AuctionHouseBotCharacter const& character)
+                        { return auction->owner == ObjectGuid::Create<HighGuid::Player>(character.CharacterGUID); });
+        }
         auctionbot->Update();
     }
 };

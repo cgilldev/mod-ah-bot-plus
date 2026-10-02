@@ -136,6 +136,11 @@ private:
     uint32 BuyerMaxCommitmentsPerSellerHour = 6;
     uint32 BuyerMinSellerBudgetCopper = 10000;
     uint32 BuyerBudgetCopperPerCeilingLevel = 1000;
+    uint32 BuyerEarnedBotsMaxCopperPerHour = 10000;
+    uint32 BuyerEarnedBotsMaxCommitmentsPerHour = 20;
+    bool EarnedSupplyCoordinationEnabled = true;
+    bool BuyerEarnedBudgetLoaded = false;
+    std::pair<uint32, uint64> BuyerEarnedBudget{};
     uint32 ProgressionAnchorCeiling = 0;
     std::unordered_map<uint32, std::pair<uint32, uint64>> BuyerSellerBudgetCache;
     bool ProgressionStockRulesEnabled = false;
@@ -393,6 +398,8 @@ public:
     void AddNewAuctionBuyerBotBid(std::vector<Player*> AHBPlayers, FactionSpecificAuctionHouseConfig* config);
     bool IsPlayerAuctionReadyForReview(uint32 auctionId);
     bool CanCommitToSeller(uint32 sellerGuid, uint64 amount);
+    bool CanCommitToEarnedBots(uint64 amount);
+    void RecordEarnedBotCommitment(CharacterDatabaseTransaction const& transaction, uint32 auctionId, uint64 amount);
     void RecordBuyerCommitment(CharacterDatabaseTransaction const& transaction, uint32 sellerGuid,
         uint32 auctionId, uint64 amount);
     void PopulateVendorItemsPrices();

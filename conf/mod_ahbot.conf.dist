@@ -318,6 +318,12 @@ AuctionHouseBot.Buyer.FirstReviewMinMinutes = 10
 AuctionHouseBot.Buyer.FirstReviewMaxMinutes = 30
 AuctionHouseBot.Buyer.MaxCommitmentsPerSellerHour = 6
 AuctionHouseBot.Buyer.MinSellerBudgetCopper = 10000
+# Aggregate earned-bot purchasing across every owner and house in a rolling hour.
+# A missing budget table blocks buying earned bot goods; human policy is unchanged.
+AuctionHouseBot.Buyer.EarnedBots.MaxCopperPerHour = 10000
+AuctionHouseBot.Buyer.EarnedBots.MaxCommitmentsPerHour = 20
+# Earned supply counts toward progression stock and reduces comparable filler weights.
+AuctionHouseBot.EarnedBots.ReduceFiller = 1
 AuctionHouseBot.Buyer.BudgetCopperPerCeilingLevel = 1000
 
 # Progression stock rules apply to new bot listings only; existing auctions remain.
