@@ -224,15 +224,16 @@ AuctionHouseBot.BuyoutBelowVendorVariationAddPercent = 0.25
 #    Note: If you have AllowTwoSide.Interaction.Auction enabled in your AzerothCore's
 #        worldserver.conf, then only the Neutral AH will appear to fill in the
 #        database. Auctions will still appear in non-Neutral AH.
-#    Default: 15000 for both
+#    Defaults: Alliance 500–800, Horde 1000–1400, Neutral 200–300.
+#    These count bot listings when progression stock is enabled.
 ###############################################################################
 
-AuctionHouseBot.Alliance.MinItems = 150
-AuctionHouseBot.Alliance.MaxItems = 250
-AuctionHouseBot.Horde.MinItems = 400
-AuctionHouseBot.Horde.MaxItems = 600
-AuctionHouseBot.Neutral.MinItems = 100
-AuctionHouseBot.Neutral.MaxItems = 200
+AuctionHouseBot.Alliance.MinItems = 500
+AuctionHouseBot.Alliance.MaxItems = 800
+AuctionHouseBot.Horde.MinItems = 1000
+AuctionHouseBot.Horde.MaxItems = 1400
+AuctionHouseBot.Neutral.MinItems = 200
+AuctionHouseBot.Neutral.MaxItems = 300
 
 ###############################################################################
 # BUYER PROPERTIES
@@ -319,11 +320,17 @@ AuctionHouseBot.Buyer.MaxCommitmentsPerSellerHour = 6
 AuctionHouseBot.Buyer.MinSellerBudgetCopper = 10000
 AuctionHouseBot.Buyer.BudgetCopperPerCeilingLevel = 1000
 
-# Progression stock rules apply to new bot listings only.
+# Progression stock rules apply to new bot listings only; existing auctions remain.
+# Items are selected from the normal tradable candidate pool, without an ID allowlist.
+# Required level is bounded by the player ceiling plus RequiredLevelOffset.
+# Skill rank is bounded by ceiling * 5 + 15 and MaxProfessionSkillRank.
+# Items without level or skill requirements use ceiling + 10 as their item-level
+# limit, further bounded by MaxItemLevelWithoutRequirements.
+# Configured maxima are upper limits, not minimum tiers to stock.
 AuctionHouseBot.ProgressionStock.Enabled = false
 AuctionHouseBot.ProgressionStock.RequiredLevelOffset = 5
-AuctionHouseBot.ProgressionStock.MaxItemLevelWithoutRequirements = 25
-AuctionHouseBot.ProgressionStock.MaxProfessionSkillRank = 90
+AuctionHouseBot.ProgressionStock.MaxItemLevelWithoutRequirements = 200
+AuctionHouseBot.ProgressionStock.MaxProfessionSkillRank = 450
 
 ###############################################################################
 #    AuctionHouseBot.ListProportion.Category*.Quality*
@@ -373,9 +380,9 @@ AuctionHouseBot.ListProportion.CategoryContainer.QualityArtifact = 0
 AuctionHouseBot.ListProportion.CategoryContainer.QualityHeirloom = 0
 
 AuctionHouseBot.ListProportion.CategoryWeapon.QualityPoor = 0
-AuctionHouseBot.ListProportion.CategoryWeapon.QualityNormal = 10
-AuctionHouseBot.ListProportion.CategoryWeapon.QualityUncommon = 0
-AuctionHouseBot.ListProportion.CategoryWeapon.QualityRare = 0
+AuctionHouseBot.ListProportion.CategoryWeapon.QualityNormal = 2
+AuctionHouseBot.ListProportion.CategoryWeapon.QualityUncommon = 7
+AuctionHouseBot.ListProportion.CategoryWeapon.QualityRare = 1
 AuctionHouseBot.ListProportion.CategoryWeapon.QualityEpic = 0
 AuctionHouseBot.ListProportion.CategoryWeapon.QualityLegendary = 0
 AuctionHouseBot.ListProportion.CategoryWeapon.QualityArtifact = 0
@@ -391,9 +398,9 @@ AuctionHouseBot.ListProportion.CategoryGem.QualityArtifact = 0
 AuctionHouseBot.ListProportion.CategoryGem.QualityHeirloom = 0
 
 AuctionHouseBot.ListProportion.CategoryArmor.QualityPoor = 0
-AuctionHouseBot.ListProportion.CategoryArmor.QualityNormal = 10
-AuctionHouseBot.ListProportion.CategoryArmor.QualityUncommon = 0
-AuctionHouseBot.ListProportion.CategoryArmor.QualityRare = 0
+AuctionHouseBot.ListProportion.CategoryArmor.QualityNormal = 2
+AuctionHouseBot.ListProportion.CategoryArmor.QualityUncommon = 7
+AuctionHouseBot.ListProportion.CategoryArmor.QualityRare = 1
 AuctionHouseBot.ListProportion.CategoryArmor.QualityEpic = 0
 AuctionHouseBot.ListProportion.CategoryArmor.QualityLegendary = 0
 AuctionHouseBot.ListProportion.CategoryArmor.QualityArtifact = 0
@@ -436,8 +443,8 @@ AuctionHouseBot.ListProportion.CategoryGeneric.QualityArtifact = 0
 AuctionHouseBot.ListProportion.CategoryGeneric.QualityHeirloom = 0
 
 AuctionHouseBot.ListProportion.CategoryRecipe.QualityPoor = 0
-AuctionHouseBot.ListProportion.CategoryRecipe.QualityNormal = 10
-AuctionHouseBot.ListProportion.CategoryRecipe.QualityUncommon = 0
+AuctionHouseBot.ListProportion.CategoryRecipe.QualityNormal = 2
+AuctionHouseBot.ListProportion.CategoryRecipe.QualityUncommon = 8
 AuctionHouseBot.ListProportion.CategoryRecipe.QualityRare = 0
 AuctionHouseBot.ListProportion.CategoryRecipe.QualityEpic = 0
 AuctionHouseBot.ListProportion.CategoryRecipe.QualityLegendary = 0

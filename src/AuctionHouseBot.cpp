@@ -1097,14 +1097,12 @@ void AuctionHouseBot::AddNewAuctions(std::vector<Player*> AHBPlayers, FactionSpe
         return;
     }
 
-    auto progressionEligible = [&](uint32 itemID, ItemTemplate const* prototype)
+    auto progressionEligible = [&](ItemTemplate const* prototype)
     {
         if (!prototype)
             return false;
-        bool professionItem = prototype->Class == ITEM_CLASS_RECIPE ||
-            prototype->Class == ITEM_CLASS_REAGENT || prototype->Class == ITEM_CLASS_TRADE_GOODS;
-        return AuctionHousePolicy::StockEligible(itemID, prototype->Quality, prototype->RequiredLevel,
-            prototype->RequiredSkillRank, prototype->ItemLevel, professionItem, ProgressionAnchorCeiling,
+        return AuctionHousePolicy::StockEligible(prototype->Quality, prototype->RequiredLevel,
+            prototype->RequiredSkillRank, prototype->ItemLevel, ProgressionAnchorCeiling,
             ProgressionStockRequiredLevelOffset, ProgressionStockMaxItemLevelWithoutRequirements,
             ProgressionStockMaxProfessionSkillRank);
     };
@@ -1127,7 +1125,7 @@ void AuctionHouseBot::AddNewAuctions(std::vector<Player*> AHBPlayers, FactionSpe
             for (uint32 itemID : qualityCandidates->second)
             {
                 ItemTemplate const* prototype = sObjectMgr->GetItemTemplate(itemID);
-                if (progressionEligible(itemID, prototype) &&
+                if (progressionEligible(prototype) &&
                     AuctionHousePolicy::CanListDuplicate(botListingCounts[itemID]))
                     eligible.push_back(itemID);
             }
@@ -1265,7 +1263,7 @@ void AuctionHouseBot::AddNewAuctions(std::vector<Player*> AHBPlayers, FactionSpe
 
             if (ProgressionStockRulesEnabled)
             {
-                if (!progressionEligible(itemID, prototype) ||
+                if (!progressionEligible(prototype) ||
                     (prototype->Quality == ITEM_QUALITY_RARE &&
                         !AuctionHousePolicy::CanListRare(botRareListingCount, botListingCount)))
                 {
@@ -2256,9 +2254,9 @@ void AuctionHouseBot::InitializeConfiguration()
     ProgressionStockMaxItemLevelWithoutRequirements =
         sConfigMgr->GetOption<uint32>(
             "AuctionHouseBot.ProgressionStock.MaxItemLevelWithoutRequirements",
-            25);
+            200);
     ProgressionStockMaxProfessionSkillRank = sConfigMgr->GetOption<uint32>(
-        "AuctionHouseBot.ProgressionStock.MaxProfessionSkillRank", 90);
+        "AuctionHouseBot.ProgressionStock.MaxProfessionSkillRank", 450);
 
     string charString = sConfigMgr->GetOption<std::string>("AuctionHouseBot.GUIDs", "0");
     AddCharacters(charString);
@@ -2527,14 +2525,14 @@ void AuctionHouseBot::InitializeConfiguration()
 
     if (!sWorld->getBoolConfig(CONFIG_ALLOW_TWO_SIDE_INTERACTION_AUCTION))
     {
-        AllianceConfig.SetMinItems(sConfigMgr->GetOption<uint32>("AuctionHouseBot.Alliance.MinItems", 15000));
-        AllianceConfig.SetMaxItems(sConfigMgr->GetOption<uint32>("AuctionHouseBot.Alliance.MaxItems", 15000));
+        AllianceConfig.SetMinItems(sConfigMgr->GetOption<uint32>("AuctionHouseBot.Alliance.MinItems", 500));
+        AllianceConfig.SetMaxItems(sConfigMgr->GetOption<uint32>("AuctionHouseBot.Alliance.MaxItems", 800));
 
-        HordeConfig.SetMinItems(sConfigMgr->GetOption<uint32>("AuctionHouseBot.Horde.MinItems", 15000));
-        HordeConfig.SetMaxItems(sConfigMgr->GetOption<uint32>("AuctionHouseBot.Horde.MaxItems", 15000));
+        HordeConfig.SetMinItems(sConfigMgr->GetOption<uint32>("AuctionHouseBot.Horde.MinItems", 1000));
+        HordeConfig.SetMaxItems(sConfigMgr->GetOption<uint32>("AuctionHouseBot.Horde.MaxItems", 1400));
     }
-    NeutralConfig.SetMinItems(sConfigMgr->GetOption<uint32>("AuctionHouseBot.Neutral.MinItems", 15000));
-    NeutralConfig.SetMaxItems(sConfigMgr->GetOption<uint32>("AuctionHouseBot.Neutral.MaxItems", 15000));
+    NeutralConfig.SetMinItems(sConfigMgr->GetOption<uint32>("AuctionHouseBot.Neutral.MinItems", 200));
+    NeutralConfig.SetMaxItems(sConfigMgr->GetOption<uint32>("AuctionHouseBot.Neutral.MaxItems", 300));
 }
 
 void AuctionHouseBot::EmptyAuctionHouses()

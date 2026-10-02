@@ -140,8 +140,8 @@ private:
     std::unordered_map<uint32, std::pair<uint32, uint64>> BuyerSellerBudgetCache;
     bool ProgressionStockRulesEnabled = false;
     uint32 ProgressionStockRequiredLevelOffset = 5;
-    uint32 ProgressionStockMaxItemLevelWithoutRequirements = 25;
-    uint32 ProgressionStockMaxProfessionSkillRank = 90;
+    uint32 ProgressionStockMaxItemLevelWithoutRequirements = 200;
+    uint32 ProgressionStockMaxProfessionSkillRank = 450;
     bool ReturnExpiredAuctionItemsToBot;
     uint32 CyclesBetweenBuyActionMin;
     uint32 CyclesBetweenBuyAction;

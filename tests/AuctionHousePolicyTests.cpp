@@ -42,24 +42,30 @@ int main()
     assert(SmallStack(6, false, true, 2) == 5);
     assert(SmallStack(3, true, false, 2) == 1);
 
-    // Versioned tier mapping blocks unreviewed zero-requirement endgame goods.
-    assert(ProfessionTierV1Allows(2589, 0, 90));
-    assert(ProfessionTierV1Allows(2881, 80, 90));
-    assert(!ProfessionTierV1Allows(2881, 80, 79));
-    assert(!ProfessionTierV1Allows(999999, 0, 90));
-    assert(!ProfessionTierV1Allows(2589, 91, 90));
+    // Low-level materials and recipes are admitted by metadata, even when they
+    // were absent from the former allowlist (Wild Steelbloom, for example).
+    assert(StockEligible(1, 0, 0, 5, 15, 5, 200, 450));   // Linen Cloth
+    assert(StockEligible(1, 0, 75, 22, 15, 5, 200, 450)); // Wild Steelbloom
+    assert(StockEligible(2, 0, 80, 18, 15, 5, 200, 450)); // Copper recipe
+    assert(!StockEligible(1, 0, 0, 5, 0, 5, 200, 450)); // Missing progression
+    assert(!StockEligible(1, 21, 0, 20, 15, 5, 200, 450));
+    assert(!StockEligible(4, 15, 0, 20, 15, 5, 200, 450));
 
-    assert(StockEligible(2589, 1, 0, 0, 5, true, 13, 5, 25, 90));
-    assert(!StockEligible(999999, 1, 0, 0, 5, true, 13, 5, 25, 90));
-    assert(!StockEligible(2589, 1, 0, 0, 5, true, 0, 5, 25, 90));
-    assert(!StockEligible(2589, 1, 19, 0, 5, true, 13, 5, 25, 90));
-    assert(!StockEligible(2589, 4, 0, 0, 5, true, 13, 5, 25, 90));
-    assert(!StockEligible(1234, 1, 0, 0, 26, false, 13, 5, 25, 90));
-    assert(!StockEligible(15871, 2, 0, 200, 40, false, 15, 5, 25, 90));
-    // Live rollout found these two newly listed items despite their template
-    // skill ranks exceeding the configured cap; non-profession classes must
-    // still obey the global skill-rank gate.
-    assert(!StockEligible(4381, 2, 0, 140, 28, false, 15, 5, 25, 90));
-    assert(!StockEligible(15870, 2, 0, 150, 30, false, 15, 5, 25, 90));
-    assert(StockEligible(6811, 1, 0, 50, 20, false, 15, 5, 25, 90));
+    // Higher material tiers unlock as the players progress, without new IDs.
+    assert(!StockEligible(1, 0, 0, 30, 15, 5, 200, 450)); // Silk Cloth
+    assert(StockEligible(1, 0, 0, 30, 20, 5, 200, 450));
+    assert(!StockEligible(1, 0, 125, 30, 20, 5, 200, 450)); // Iron Ore
+    assert(StockEligible(1, 0, 125, 30, 22, 5, 200, 450));
+    assert(!StockEligible(1, 0, 0, 70, 15, 5, 200, 450)); // Frostweave
+    assert(StockEligible(1, 0, 0, 70, 60, 5, 200, 450));
+    assert(!StockEligible(1, 0, 400, 75, 15, 5, 200, 450)); // Saronite
+    assert(StockEligible(1, 0, 400, 75, 80, 5, 200, 450));
+
+    // Explicit configuration can still impose stricter limits.
+    assert(!StockEligible(1, 0, 0, 30, 40, 5, 25, 450));
+    assert(!StockEligible(1, 0, 125, 30, 40, 5, 200, 90));
+    // Every class observes the skill cap, including engineering equipment.
+    assert(!StockEligible(2, 0, 140, 28, 15, 5, 200, 450));
+    assert(!StockEligible(2, 0, 150, 30, 15, 5, 200, 450));
+    assert(StockEligible(1, 0, 50, 20, 15, 5, 200, 450));
 }
